@@ -48,6 +48,14 @@ def _cache_dir(cfg: dict) -> Path | None:
 def main() -> None:
     args = _parse_args()
     cfg = _load(args.config)
+    try:
+        _run(args, cfg)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def _run(args: argparse.Namespace, cfg: dict) -> None:
+    grid = grid_from_config(cfg)
     aoi = resolve_aoi_path(None, cfg)
     output_dir = Path(resolve_output_dir(args.output_dir, cfg))
     raw_dir = Path(args.raw_dir) if args.raw_dir else output_dir / "soil_raw"
@@ -62,6 +70,7 @@ def main() -> None:
         clip_to_aoi=True,
         overwrite=args.overwrite,
         keep_intermediates=args.keep_intermediates,
+        grid=grid,
     )
     print(f"Saved fetch manifest: {fetch_manifest}")
 
@@ -69,7 +78,7 @@ def main() -> None:
         aoi_path=aoi,
         output_dir=output_dir,
         specs=specs,
-        grid=grid_from_config(cfg),
+        grid=grid,
         source_dir=raw_dir,
         output_format=args.format,
         overwrite=args.overwrite,

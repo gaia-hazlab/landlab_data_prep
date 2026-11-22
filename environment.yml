@@ -1,14 +1,14 @@
 name: landlab_data_prep
 channels:
   - conda-forge
+  - nodefaults
 dependencies:
-  - python=3.10
+  - python=3.12
   - pip
   - numpy
   - pyyaml
   - requests
   - rasterio
-  - fiona
   - geopandas
   - shapely
   - pyproj

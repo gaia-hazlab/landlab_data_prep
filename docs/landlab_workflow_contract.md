@@ -32,8 +32,12 @@ check is a test, not a convention.
 | DEM | USGS 3DEP 10 m (today via OpenTopography; Planetary Computer `3dep-seamless` would do) | 10 m | cubic | `-9999` outside AOI |
 | Burn severity, SBS | BAER / MTBS | 20–30 m | nearest | classes 2–4 kept; everything else, missing data and outside the AOI included, becomes 1 (unburned). The one layer with no nodata |
 | Soil, 7 layers | SOLUS100 (`cec7`, `anylithicdpt`, `claytotal`, `ph1to1h2o`, `sandtotal`, `silttotal`, `dbovendry`, all 0 cm) | 100 m | bilinear | where any one is missing, every derived soil field is `-9999` and the Landlab node is closed |
-| Landcover | NLCD Annual 2021 | 30 m | nearest | water (class 11) closes the node |
-| K-factor | STATSGO KFFACT, USGS ScienceBase | 30 m | nearest | `-0.1` (large water bodies) is a code, not a value: becomes `-9999` |
+| Landcover | USGS Annual NLCD 2021 (C1V1), the Cloud-Optimized GeoTIFF USGS HyTEST hosts | 30 m | nearest | water (class 11) closes the node |
+| K-factor | STATSGO KFFACT, USGS ScienceBase (its public S3 copy) | 30 m | nearest | `-0.1` (large water bodies) is a code, not a value: becomes `-9999` |
+
+Soil, landcover and K-factor are Cloud-Optimized GeoTIFFs, read in place:
+only the window around the AOI is fetched, at the source's own pixels, and
+warped onto the grid like any local file.
 
 Copernicus 30 m is not a substitute for the DEM: the terrain features (slope,
 specific catchment area, ΔG, curvature) are computed at 10 m on a lidar
@@ -44,7 +48,7 @@ footprint, and lose their meaning at 30 m.
 | Dataset | Source | Native | Resampling | Note |
 |---|---|---|---|---|
 | dNBR | BAER preliminary bundle | 30 m | bilinear | continuous severity |
-| HLS NBR, NDVI, NDMI | NASA HLS v2.0, pre and post windows | 30 m | bilinear | median of cloud-free scenes per window; pre − post and relative dNBR |
+| HLS NBR, NDVI, NDMI | NASA HLS v2.0, pre and post windows | 30 m | bilinear | median of cloud-free scenes per window; change is post − pre (negative = loss), NBR also relativized |
 | PRISM daily ppt, tmin, tmax | PRISM, by release | 800 m / 4 km | ppt nearest, temperature bilinear | one grid per day; PRISM's day ends 12:00 UTC |
 | Synoptic station precipitation | Synoptic API | stations | nearest station within `max_distance_km`, else nodata | hourly to daily totals; FlowAlert's source |
 | NISAR GCOV, SME2 | NASA Earthdata | 20–30 m | GCOV average of linear power; SME2 nearest | soil moisture flags withhold most of the AOI in winter |

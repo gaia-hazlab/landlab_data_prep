@@ -32,8 +32,9 @@ def resolve_api_key(dem_cfg: Mapping, environ: Mapping[str, str] | None = None) 
     if value:
         return value
     raise MissingApiKeyError(
-        "Downloading a DEM needs an OpenTopography API key. Set dem.api_key in the config, "
-        "or the USGS_TOPO_API_KEY or OPENTOPOGRAPHY_API_KEY environment variable."
+        "Downloading a DEM needs an OpenTopography API key, free from "
+        "https://portal.opentopography.org/requestService?service=api. Set the OPENTOPOGRAPHY_API_KEY "
+        "or USGS_TOPO_API_KEY environment variable, or dem.api_key in the config."
     )
 
 

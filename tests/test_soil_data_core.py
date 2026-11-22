@@ -72,7 +72,6 @@ def test_resolve_soil_specs_override() -> None:
 
 
 def _soil_case(tmp_path: Path):
-    pytest.importorskip("fiona")
     geopandas = pytest.importorskip("geopandas")
     shapely_geometry = pytest.importorskip("shapely.geometry")
 

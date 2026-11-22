@@ -9,7 +9,13 @@ import numpy as np
 
 from landlab_data_prep.config import load_config, validate_config
 from landlab_data_prep.dem import fetch_dem
-from landlab_data_prep.downloads import cached_download, extract_first_tif, extract_tif_by_suffix
+from landlab_data_prep.downloads import (
+    cached_download,
+    extract_first_tif,
+    extract_tif_by_suffix,
+    fetch_raster,
+    is_zip_url,
+)
 from landlab_data_prep.landlab_io import add_ascii_field, load_grid, read_nodata_value, write_ascii_field
 from landlab_data_prep.preflight import (
     ensure_output_dir_writable,
@@ -217,7 +223,7 @@ def build_sources_from_config(cfg: dict) -> list[SourceSpec]:
     return sources
 
 
-def _resolve_single_source(spec: SourceSpec, cache_dir: str | None, work_dir: str) -> str:
+def _resolve_single_source(spec: SourceSpec, cache_dir: str | None, work_dir: str, grid: Grid | None = None) -> str:
     uri = spec.uri
     if isinstance(uri, list):
         raise TypeError("Expected a single URI, got list")
@@ -225,9 +231,9 @@ def _resolve_single_source(spec: SourceSpec, cache_dir: str | None, work_dir: st
     if uri.startswith(("http://", "https://")):
         if not cache_dir:
             raise ValueError(f"{spec.key}: {uri} downloads, which needs paths.cache_dir in the config")
+        if not (spec.unzip or is_zip_url(uri)):
+            return str(fetch_raster(uri, cache_dir, grid))  # only the window around the grid
         local = cached_download(uri, cache_dir)
-        if local.suffix.lower() != ".zip" and not spec.unzip:
-            return str(local)
         return str(_tif_from_zip(local, os.path.join(cache_dir, f"{local.stem}_extracted"), spec))
 
     if not os.path.exists(uri):
@@ -243,10 +249,13 @@ def _tif_from_zip(zip_path, dest_dir: str, spec: SourceSpec):
     return extract_first_tif(zip_path, dest_dir)
 
 
-def resolve_source_to_tif(spec: SourceSpec, cache_dir: str | None, work_dir: str) -> str:
-    """A local file or a cached download; for a candidate list, the first one that works."""
+def resolve_source_to_tif(spec: SourceSpec, cache_dir: str | None, work_dir: str, grid: Grid | None = None) -> str:
+    """A local file or a cached download; for a candidate list, the first one that works.
+
+    With ``grid``, a remote GeoTIFF is read only around the grid.
+    """
     if not isinstance(spec.uri, list):
-        return _resolve_single_source(spec, cache_dir, work_dir)
+        return _resolve_single_source(spec, cache_dir, work_dir, grid)
     errors: list[str] = []
     for candidate in spec.uri:
         try:
@@ -260,6 +269,7 @@ def resolve_source_to_tif(spec: SourceSpec, cache_dir: str | None, work_dir: str
                 ),
                 cache_dir,
                 work_dir,
+                grid,
             )
         except Exception as exc:
             errors.append(f"{candidate}: {exc}")
@@ -297,7 +307,7 @@ def process_source(
     cache_dir: str | None = None,
     cleanup_intermediates: bool = True,
 ) -> str:
-    src_path = resolve_source_to_tif(spec, cache_dir, os.path.join(output_dir, DOWNLOADS_SUBDIR))
+    src_path = resolve_source_to_tif(spec, cache_dir, os.path.join(output_dir, DOWNLOADS_SUBDIR), grid)
     aligned = align_to_grid(
         src_path,
         os.path.join(output_dir, ALIGNED_SUBDIR, f"{spec.key}.tif"),

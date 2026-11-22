@@ -80,7 +80,7 @@ def load_config(path: str | Path, command: str) -> dict:
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"Config not found: {path}")
-    cfg = yaml.safe_load(path.read_text())
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     validate_config(cfg, command, source=str(path))
     return cfg
 

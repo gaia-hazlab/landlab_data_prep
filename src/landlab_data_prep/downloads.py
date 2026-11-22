@@ -2,21 +2,128 @@
 
 A cached file only ever appears after a complete download, so reusing it is
 safe. Delete the cache directory to force a fresh download.
+
+A remote GeoTIFF is read in place when a grid is known: only the part around
+the grid is fetched, by HTTP range requests, and cached at the file's own
+pixels. A nationwide soil or land-cover layer then costs megabytes, not
+gigabytes, for a small AOI. Zips are always downloaded whole.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
+import math
 import os
 from pathlib import Path
 import shutil
 import time
+from typing import TYPE_CHECKING
 import zipfile
 
+import rasterio
+from rasterio.errors import RasterioError
+from rasterio.warp import transform_bounds
+from rasterio.windows import Window, from_bounds
 import requests
 
+if TYPE_CHECKING:
+    from landlab_data_prep.analysis_grid import Grid
+
+LOG = logging.getLogger(__name__)
 CHUNK_BYTES = 16 * 1024 * 1024
 _EXTRACTED_MARKER = ".extracted"
+# The window around the grid reaches past it by more than any resampling kernel
+# looks: a cubic kernel spans 2 source pixels when the grid is finer than the
+# source, and 2 grid cells when it is coarser. A warp from the window is then
+# the same as a warp from the whole file, to float32 rounding.
+WINDOW_MARGIN_CELLS = 4
+WINDOW_PAD_PIXELS = 4
+# GDAL settings for reading a remote file in place.
+REMOTE_READ_OPTIONS = {
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",  # do not list the server's folder
+    "GDAL_HTTP_MAX_RETRY": "5",
+    "GDAL_HTTP_RETRY_DELAY": "2",
+}
+
+
+def _cache_name(url: str) -> str:
+    """A file name for ``url``: a short hash, so two URLs never share one, and the URL's own name."""
+    name = Path(url.split("?", 1)[0]).name or "download"
+    return f"{hashlib.sha1(url.encode()).hexdigest()[:12]}_{name}"
+
+
+def is_zip_url(url: str) -> bool:
+    return Path(url.split("?", 1)[0]).suffix.lower() == ".zip"
+
+
+def fetch_raster(url: str, cache_dir: str | Path, grid: Grid | None = None) -> Path:
+    """A local GeoTIFF for a remote one: the window around ``grid`` when given, else the whole file.
+
+    A file that cannot be read in place, such as one on a server without range
+    requests, is downloaded whole instead.
+    """
+    if grid is not None:
+        try:
+            return cached_window(url, cache_dir, grid)
+        except (RasterioError, OSError) as exc:
+            LOG.warning("Cannot read %s in place (%s); downloading the whole file instead.", url, exc)
+    return cached_download(url, cache_dir)
+
+
+def cached_window(url: str, cache_dir: str | Path, grid: Grid) -> Path:
+    """The part of a remote GeoTIFF that covers ``grid``, cached at the file's own pixels and values.
+
+    Band 1 only, with the source's CRS, nodata and scale. Putting it on the grid
+    is left to ``analysis_grid.align_to_grid``, as for any local file.
+    """
+    target = Path(cache_dir) / "windows" / _cache_name(url) / f"{grid.cache_key}.tif"
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+
+    with rasterio.Env(**REMOTE_READ_OPTIONS), rasterio.open(url) as src:
+        window = _window_around(src, grid)
+        data = src.read(1, window=window)
+        profile = {
+            "driver": "GTiff",
+            "width": int(window.width),
+            "height": int(window.height),
+            "count": 1,
+            "dtype": src.dtypes[0],
+            "crs": src.crs,
+            "transform": src.window_transform(window),
+            "nodata": src.nodata,
+            "compress": "deflate",
+        }
+        scale, offset = src.scales[0], src.offsets[0]
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(target.name + ".part")
+    try:
+        with rasterio.open(partial, "w", **profile) as dst:
+            dst.write(data, 1)
+            dst.scales, dst.offsets = (scale,), (offset,)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
+    return target
+
+
+def _window_around(src, grid: Grid) -> Window:
+    """Source pixels under ``grid``, its margin and a few pixels of padding, clipped to the file."""
+    left, bottom, right, top = grid.bounds
+    margin = WINDOW_MARGIN_CELLS * grid.resolution
+    bounds = transform_bounds(
+        grid.crs, src.crs, left - margin, bottom - margin, right + margin, top + margin, densify_pts=21
+    )
+    window = from_bounds(*bounds, transform=src.transform)
+    col0 = max(math.floor(window.col_off) - WINDOW_PAD_PIXELS, 0)
+    row0 = max(math.floor(window.row_off) - WINDOW_PAD_PIXELS, 0)
+    col1 = min(math.ceil(window.col_off + window.width) + WINDOW_PAD_PIXELS, src.width)
+    row1 = min(math.ceil(window.row_off + window.height) + WINDOW_PAD_PIXELS, src.height)
+    if col0 >= col1 or row0 >= row1:
+        raise ValueError(f"{src.name} does not cover the AOI")
+    return Window(col0, row0, col1 - col0, row1 - row0)
 
 
 def cached_download(
@@ -35,10 +142,7 @@ def cached_download(
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    if filename is None:
-        name = Path(url.split("?", 1)[0]).name or "download"
-        filename = f"{hashlib.sha1(url.encode()).hexdigest()[:12]}_{name}"
-    target = cache_dir / filename
+    target = cache_dir / (filename or _cache_name(url))
     if target.is_file() and target.stat().st_size > 0:
         return target
 

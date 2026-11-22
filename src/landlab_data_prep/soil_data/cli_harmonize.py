@@ -52,17 +52,20 @@ def main() -> None:
     args = _parse_args()
     cfg = _load(args.config)
     specs = resolve_soil_specs(parse_soil_keys(args.soil_keys), cfg)
-    manifest_path = harmonize_soil_layers(
-        aoi_path=resolve_aoi_path(None, cfg),
-        output_dir=Path(resolve_output_dir(args.output_dir, cfg)),
-        specs=specs,
-        grid=grid_from_config(cfg),
-        source_dir=Path(args.source_dir) if args.source_dir else None,
-        cache_dir=_cache_dir(cfg),
-        output_format=args.format,
-        overwrite=args.overwrite,
-        keep_intermediates=args.keep_intermediates,
-    )
+    try:
+        manifest_path = harmonize_soil_layers(
+            aoi_path=resolve_aoi_path(None, cfg),
+            output_dir=Path(resolve_output_dir(args.output_dir, cfg)),
+            specs=specs,
+            grid=grid_from_config(cfg),
+            source_dir=Path(args.source_dir) if args.source_dir else None,
+            cache_dir=_cache_dir(cfg),
+            output_format=args.format,
+            overwrite=args.overwrite,
+            keep_intermediates=args.keep_intermediates,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        raise SystemExit(str(exc)) from None
     print(f"Saved harmonize manifest: {manifest_path}")
     print(f"Soil layers aligned: {len(specs)}")
 

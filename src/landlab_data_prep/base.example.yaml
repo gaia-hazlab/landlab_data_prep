@@ -41,6 +41,7 @@ dem:
   dem_type: USGS10m
   buffer_deg: 0.05
   api_key: ""                        # OpenTopography key; USGS_TOPO_API_KEY or OPENTOPOGRAPHY_API_KEY override it
+                                     # Free key: https://portal.opentopography.org/requestService?service=api
 
 # ----------------------------------------------------------------------------
 # Burn severity, categorical SBS: source is local, remote, remote_then_local or auto
@@ -75,7 +76,9 @@ dnbr:
     resampling: bilinear
 
 # ----------------------------------------------------------------------------
-# Soil and landcover: each url is a local file or a remote URL.
+# Soil and landcover: each url is a local file or a remote URL. A remote
+# GeoTIFF is read in place: only the part around the AOI is downloaded and
+# cached, so a nationwide layer costs megabytes. A zip is downloaded whole.
 # ----------------------------------------------------------------------------
 feature_sources:
   rasters:
@@ -100,15 +103,18 @@ feature_sources:
     dbovendry_0_cm:
       url: https://storage.googleapis.com/solus100pub/dbovendry_0_cm_p.tif
       resampling: bilinear
-    kffact:                      # STATSGO soil erodibility K-factor, USGS ScienceBase
-      url: https://www.sciencebase.gov/catalog/file/get/6750c172d34ed8d3858534d8?name=statsgo-KFFACT.tif
+    kffact:                      # STATSGO soil erodibility K-factor, USGS ScienceBase item 6750c172d34ed8d3858534d8
+      url: https://prod-is-usgs-sb-prod-publish.s3.amazonaws.com/6750c172d34ed8d3858534d8/statsgo-KFFACT.tif
       resampling: nearest
       missing_values: [-0.1]     # STATSGO marks large water bodies with -0.1
   landcover:
-    nlcd_2021:
-      url: https://www.mrlc.gov/downloads/sciweb1/shared/mrlc/data-bundles/Annual_NLCD_LndCov_2021_CU_C1V1.zip
+    nlcd_2021:                   # USGS Annual NLCD 2021 (Collection 1 v1), the copy USGS HyTEST hosts
+      url: https://usgs.osn.mghpcc.org/hytest/nlcd/annual-nlcd-cu-c1v1/mosaic/Annual_NLCD_LndCov_2021_CU_C1V1.tif
       resampling: nearest
-      unzip: true
+      unzip: false
+      # The same data as a 1.4 GB zip from MRLC, downloaded whole:
+      # url: https://www.mrlc.gov/downloads/sciweb1/shared/mrlc/data-bundles/Annual_NLCD_LndCov_2021_CU_C1V1.zip
+      # unzip: true
 
 # ----------------------------------------------------------------------------
 # Remote sensing: NASA HLS vegetation indices, built by

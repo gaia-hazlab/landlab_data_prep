@@ -7,12 +7,14 @@ from pathlib import Path
 import shutil
 
 from landlab_data_prep.analysis_grid import ALIGNED_SUBDIR, Grid, GridMismatchError, align_to_grid, check_on_grid
+from landlab_data_prep.downloads import cached_download, extract_first_tif, fetch_raster, is_zip_url
 from landlab_data_prep.preflight import (
     ensure_output_dir_writable,
     load_and_validate_aoi,
     validate_aoi_overlaps_raster,
     validate_raster_path,
 )
+from landlab_data_prep.reproject_and_resample import clip_raster_to_shape, convert_to_ascii
 
 
 MANIFEST_VERSION = "1.0"
@@ -143,9 +145,9 @@ def _validate_local_source_for_aoi(aoi_path: Path, uri: str, *, label: str) -> N
     validate_aoi_overlaps_raster(aoi_path, local_path, label=label)
 
 
-def _resolve_single_source(spec: RasterSourceSpec, output_dir: Path, cache_dir: Path | None) -> Path:
-    from landlab_data_prep.downloads import cached_download, extract_first_tif
-
+def _resolve_single_source(
+    spec: RasterSourceSpec, output_dir: Path, cache_dir: Path | None, grid: Grid | None = None
+) -> Path:
     uri = spec.uri
     if isinstance(uri, list):
         raise TypeError("Expected a single URI, got list.")
@@ -153,10 +155,10 @@ def _resolve_single_source(spec: RasterSourceSpec, output_dir: Path, cache_dir: 
     if uri.startswith(("http://", "https://")):
         if cache_dir is None:
             raise ValueError(f"{spec.key}: {uri} downloads, which needs paths.cache_dir in the config")
+        if not (spec.unzip or is_zip_url(uri)):
+            return fetch_raster(uri, cache_dir, grid)  # with a grid, only the window around it
         local = cached_download(uri, cache_dir)
-        if local.suffix.lower() == ".zip" or spec.unzip:
-            return extract_first_tif(local, Path(cache_dir) / f"{local.stem}_extracted")
-        return local
+        return extract_first_tif(local, Path(cache_dir) / f"{local.stem}_extracted")
 
     local = Path(uri)
     if not local.exists():
@@ -166,9 +168,11 @@ def _resolve_single_source(spec: RasterSourceSpec, output_dir: Path, cache_dir: 
     return local
 
 
-def _resolve_source_to_tif(spec: RasterSourceSpec, output_dir: Path, cache_dir: Path | None) -> Path:
+def _resolve_source_to_tif(
+    spec: RasterSourceSpec, output_dir: Path, cache_dir: Path | None, grid: Grid | None = None
+) -> Path:
     if not isinstance(spec.uri, list):
-        return _resolve_single_source(spec, output_dir, cache_dir)
+        return _resolve_single_source(spec, output_dir, cache_dir, grid)
     errors: list[str] = []
     for candidate in spec.uri:
         try:
@@ -176,6 +180,7 @@ def _resolve_source_to_tif(spec: RasterSourceSpec, output_dir: Path, cache_dir: 
                 RasterSourceSpec(key=spec.key, uri=candidate, resampling=spec.resampling, unzip=spec.unzip),
                 output_dir,
                 cache_dir,
+                grid,
             )
         except Exception as exc:
             errors.append(f"{candidate}: {exc}")
@@ -236,17 +241,13 @@ def fetch_soil_layers(
     clip_to_aoi: bool = True,
     overwrite: bool = False,
     keep_intermediates: bool = False,
+    grid: Grid | None = None,
 ) -> Path:
-    try:
-        from landlab_data_prep.reproject_and_resample import clip_raster_to_shape
-    except ModuleNotFoundError as exc:
-        if exc.name == "fiona":
-            raise ImportError(
-                "Missing dependency 'fiona'. Install dependencies first "
-                "(recommended: conda env create -f environment.yml)."
-            ) from exc
-        raise
+    """Fetch soil layers, cropped to the AOI on their own pixels unless ``clip_to_aoi`` is False.
 
+    With ``grid`` and cropping, a remote layer is read only around the grid
+    instead of being downloaded whole.
+    """
     load_and_validate_aoi(aoi_path)
     ensure_output_dir_writable(output_dir)
     for spec in specs:
@@ -274,7 +275,7 @@ def fetch_soil_layers(
 
         src_tif = _resolve_source_to_tif(
             RasterSourceSpec(key=spec.key, uri=spec.url, resampling=spec.resampling),
-            output_dir, cache_dir,
+            output_dir, cache_dir, grid if clip_to_aoi else None,
         )
         out_tif = src_tif
         if clip_to_aoi:
@@ -337,16 +338,6 @@ def harmonize_soil_layers(
     if output_format not in {"asc", "tif", "both"}:
         raise ValueError(f"Unsupported output_format: {output_format}")
 
-    try:
-        from landlab_data_prep.reproject_and_resample import convert_to_ascii
-    except ModuleNotFoundError as exc:
-        if exc.name == "fiona":
-            raise ImportError(
-                "Missing dependency 'fiona'. Install dependencies first "
-                "(recommended: conda env create -f environment.yml)."
-            ) from exc
-        raise
-
     load_and_validate_aoi(aoi_path)
     ensure_output_dir_writable(output_dir)
     export_asc = output_format in {"asc", "both"}
@@ -372,7 +363,7 @@ def harmonize_soil_layers(
             layers.append(_layer_record(spec, None, out_asc, out_tif, export_asc, export_tif, "skipped_existing"))
             continue
 
-        source_tif = _soil_source_tif(spec, aoi_path, output_dir, source_dir, cache_dir)
+        source_tif = _soil_source_tif(spec, aoi_path, output_dir, source_dir, cache_dir, grid)
         aligned = align_to_grid(
             source_tif,
             output_dir / ALIGNED_SUBDIR / f"{spec.key}.tif",
@@ -416,7 +407,12 @@ def harmonize_soil_layers(
 
 
 def _soil_source_tif(
-    spec: SoilVarSpec, aoi_path: Path, output_dir: Path, source_dir: Path | None, cache_dir: Path | None
+    spec: SoilVarSpec,
+    aoi_path: Path,
+    output_dir: Path,
+    source_dir: Path | None,
+    cache_dir: Path | None,
+    grid: Grid | None = None,
 ) -> Path:
     if source_dir is not None:
         candidate = source_dir / f"{spec.key}.tif"
@@ -428,7 +424,7 @@ def _soil_source_tif(
         _validate_local_source_for_aoi(aoi_path, spec.url, label=f"Soil source {spec.key}")
     return _resolve_source_to_tif(
         RasterSourceSpec(key=spec.key, uri=spec.url, resampling=spec.resampling),
-        output_dir, cache_dir,
+        output_dir, cache_dir, grid,
     )
 
 

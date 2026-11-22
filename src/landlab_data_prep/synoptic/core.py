@@ -6,12 +6,11 @@ import json
 import os
 from pathlib import Path
 
-import fiona
 import geopandas as gpd
 import numpy as np
 import rasterio
 import requests
-from shapely.geometry import Point, mapping
+from shapely.geometry import Point
 from shapely.ops import unary_union
 
 from landlab_data_prep.analysis_grid import NODATA, aoi_mask, check_on_grid
@@ -68,21 +67,25 @@ def write_csv(path, rows, fields):
         writer.writerows(rows)
 
 
+STATION_COLUMNS = {
+    "station_index": "int64", "stid": "str", "name": "str", "network": "str",
+    "longitude": "float64", "latitude": "float64", "returned_records": "int64",
+    "valid_intervals": "int64", "requested_intervals": "int64", "availability_fraction": "float64",
+}
+
+
 def write_station_layer(path, stations, availability, grid, total_intervals):
     """A point layer in the analysis CRS, including stations with no usable data."""
-    schema = {"geometry": "Point", "properties": {
-        "station_index": "int", "stid": "str", "name": "str", "network": "str",
-        "longitude": "float", "latitude": "float", "returned_records": "int",
-        "valid_intervals": "int", "requested_intervals": "int", "availability_fraction": "float",
-    }}
-    with fiona.open(path, "w", driver="GPKG", layer="stations", schema=schema, crs=grid.crs) as dst:
-        for stid, station in stations.items():
-            returned, valid = availability[stid]
-            point = gpd.GeoSeries([Point(station["longitude"], station["latitude"])], crs=4326)
-            properties = dict(station, network=str(station["network"]), returned_records=returned,
-                              valid_intervals=valid, requested_intervals=total_intervals,
-                              availability_fraction=valid / total_intervals)
-            dst.write({"geometry": mapping(point.to_crs(grid.crs).iloc[0]), "properties": properties})
+    rows = []
+    for stid, station in stations.items():
+        returned, valid = availability[stid]
+        rows.append(dict(station, network=str(station["network"]), returned_records=returned,
+                         valid_intervals=valid, requested_intervals=total_intervals,
+                         availability_fraction=valid / total_intervals))
+    table = gpd.GeoDataFrame(rows, columns=list(STATION_COLUMNS)).astype(STATION_COLUMNS)
+    points = gpd.points_from_xy(table["longitude"], table["latitude"], crs=4326)
+    layer = gpd.GeoDataFrame(table, geometry=points).to_crs(grid.crs)
+    layer.to_file(path, layer="stations", driver="GPKG")
 
 
 def usable_total(record, start, end, hours):

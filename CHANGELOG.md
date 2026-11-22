@@ -19,6 +19,13 @@
 - One module, `landlab_data_prep.earthdata`, for NASA Earthdata credentials,
   CMR search and partial reads, shared by HLS, NISAR and SMAP.
 - `h5py` is a new dependency.
+- `landlab-prep-init-config --example` writes a config that runs as it is: a
+  3.3 km2 basin burned by the 2024 Pioneer Fire, Washington, with the basin
+  outline from the USGS debris-flow hazard assessment. Only an OpenTopography
+  key is needed.
+- Python 3.14 is supported, and tested in CI.
+- A weekly CI job, and `python -m pytest -m network`, check that every remote
+  source in the config template can still be read.
 
 ### Changed
 
@@ -29,6 +36,27 @@
   `hls_dnbr` -> `hls_delta_nbr` and `hls_rdnbr` -> `hls_rdelta_nbr`
   (Landlab fields `hls__delta_*`). The NBR pair is the published dNBR and
   RdNBR with the sign flipped: high severity is `delta_nbr` below -660.
+- Remote GeoTIFF sources are read in place: only the part around the AOI is
+  fetched, by HTTP range requests, and cached at the source's own pixels. The
+  first run for a 3 km2 AOI downloaded 7.2 GB of national soil and landcover
+  files before; it now fetches 7.5 MB in all. A warp from the cached part
+  equals a warp from the whole file to float32 rounding: on the 323 km2 Pioneer
+  watershed at 30 m, 46 of 48 output files were identical, and the other two
+  (soil thickness, ASCII and GeoTIFF) differed in 2 of 1 million cells by one
+  rounding step, at depths below a micrometre. Zips are still downloaded whole,
+  and a file that cannot be read in place falls back to a whole download.
+- Landcover in the template is the USGS Annual NLCD 2021 Cloud-Optimized
+  GeoTIFF that USGS HyTEST hosts, instead of the 1.4 GB MRLC zip. The pixels
+  are identical.
+- `fiona` is no longer a dependency; vector files are read and written through
+  geopandas, which needs 1.0 or later.
+- `environment.yml` uses Python 3.12 and conda-forge only. With Python 3.10 its
+  solve could run for half an hour; it now installs in about 90 seconds.
+  `environment.lock.yml` is solved again from it and takes nothing from
+  Anaconda's `defaults` channel.
+- `landlab-prep-pipeline` and the soil commands report an expected failure, such
+  as a missing file or a failed download, in one message instead of a traceback
+  (`--log-level DEBUG` shows the traceback).
 
 ### Fixed
 
@@ -39,11 +67,22 @@
   Landlab 2.11 reads that corner as a cell corner. Fields are now written from
   the analysis grid's own corner and checked against it after writing. The
   values were always right; only their placement was off.
+- The template's K-factor link went dead (404) when ScienceBase moved its
+  downloads, so every first run failed. It now points at the same file's public
+  S3 copy; the pixels are identical.
+- On Python 3.11, `pip install` gave a Landlab that could not be imported:
+  `requireit` 0.9.0, which Landlab needs, declares Python 3.11 but uses 3.12
+  syntax. It is held below 0.9 there.
+- Configs are read as UTF-8 on every platform, so a path or comment with a
+  non-ASCII character no longer breaks them on Windows.
 
 ### Migrating from 1.0.0
 
 - Configs keep working. Anything that reads the HLS change rasters must use
   the new names and expect the opposite sign.
+- In an existing config, replace the K-factor `url` with the template's, which
+  works without a cached copy. To skip the whole-file landcover download,
+  replace the NLCD entry with the template's too (`unzip: false`).
 - Rebuild pipeline outputs made with Landlab 2.11 or later, and the GeoTIFFs
   exported from them.
 

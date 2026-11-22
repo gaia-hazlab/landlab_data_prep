@@ -7,28 +7,52 @@ rainfall, NISAR radar and soil moisture, and SMAP soil moisture.
 
 ## Install
 
+Python 3.10 to 3.14, on Linux, macOS or Windows:
+
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install landlab_data_prep@git+https://github.com/gaia-hazlab/landlab_data_prep
+python -m venv .venv
+source .venv/bin/activate                  # Windows: .venv\Scripts\activate
+pip install "landlab_data_prep @ git+https://github.com/gaia-hazlab/landlab_data_prep"
 ```
 
-Python 3.10 to 3.13. To reproduce the exact tested environment instead:
+Every dependency installs from a prebuilt wheel, in about two minutes.
+
+**With conda** instead, from a clone. Use [Miniforge](https://conda-forge.org/download/);
+with Miniconda or Anaconda, run `conda tos accept` once first.
 
 ```bash
-conda env create -f environment.lock.yml   # environment.yml off Linux
+git clone https://github.com/gaia-hazlab/landlab_data_prep
+cd landlab_data_prep
+conda env create -f environment.yml        # exact tested Linux versions: environment.lock.yml
 conda activate landlab_data_prep
 pip install --no-deps -e .
 ```
 
 ## Quick start
 
+The DEM comes from OpenTopography, which needs a free API key.
+[Request one](https://portal.opentopography.org/requestService?service=api), then
+`export OPENTOPOGRAPHY_API_KEY=<key>` (PowerShell: `$env:OPENTOPOGRAPHY_API_KEY="<key>"`).
+
+Try the example first, a 3.3 km² basin burned by the 2024 Pioneer Fire, Washington:
+
 ```bash
-landlab-prep-init-config                   # writes config/base.yaml
-# edit config/base.yaml for your event
+landlab-prep-init-config --example         # writes config/base.yaml and the basin outline
 landlab-prep-pipeline --config config/base.yaml --export-final-tifs
 ```
 
-The config is never tracked by git, and holds one event at a time.
+In about a minute `output/` holds the 24 Landlab fields, as ESRI ASCII and
+GeoTIFF; the first run downloads under 10 MB. Then set up your own event:
+
+```bash
+landlab-prep-init-config --output config/my_fire.yaml
+# edit the AOI, output_dir, cache_dir, and the fire's name and id
+landlab-prep-pipeline --config config/my_fire.yaml --export-final-tifs
+```
+
+A config holds one event, and in a clone `config/` is never tracked by git. On WSL, keep
+`output_dir` and `cache_dir` on the Linux disk (`~/...`), not under `/mnt/c`:
+writing there is about 15 times slower.
 
 ## Commands
 
@@ -54,7 +78,9 @@ Every command takes `--config`. Add `--help` for its options.
 - One file per event. The template documents every key.
 - Bad configs stop the run: unknown keys, wrong types and missing values are
   all reported at once, before any work starts.
-- Downloads are cached in `paths.cache_dir` and reused.
+- Downloads are cached in `paths.cache_dir` and reused. Remote GeoTIFFs (soil,
+  K-factor, landcover) are read in place: only the part around the AOI is
+  fetched, so a first run downloads megabytes, not gigabytes.
 - DEM downloads need an OpenTopography key, read from `USGS_TOPO_API_KEY`,
   then `OPENTOPOGRAPHY_API_KEY`, then `dem.api_key`.
 
@@ -95,11 +121,11 @@ Written to `<output_dir>/remote_sensing`:
 | `hls_<index>_pre.tif`, `hls_<index>_post.tif` | Median of cloud-free observations |
 | `hls_delta_ndvi.tif`, `hls_delta_ndmi.tif` | Post minus pre; loss is negative |
 | `hls_delta_nbr.tif`, `hls_rdelta_nbr.tif` | NBR change and relativized NBR change, post minus pre, scaled by 1000 |
+| `hls_clear_count_pre.tif`, `hls_clear_count_post.tif` | Cloud-free days per pixel |
 
 Every change layer is post minus pre, as for elevation change: negative means
 loss. The NBR pair is the published dNBR and RdNBR with the sign flipped, which
 is why the names differ: high severity is `delta_nbr` below -660.
-| `hls_clear_count_pre.tif`, `hls_clear_count_post.tif` | Cloud-free days per pixel |
 
 Cloud, shadow, snow and high-aerosol pixels are masked. HLS starts in 2013
 (Landsat) and late 2015 (Sentinel-2).
@@ -219,6 +245,7 @@ python scripts/download_dem.py --aoi aoi.shp --crs EPSG:32610 --resolution 10 --
 ```bash
 pip install -e ".[dev]"
 python -m pytest -q tests
+python -m pytest -q -m network    # the remote sources in the template still answer
 ruff check .
 ```
 

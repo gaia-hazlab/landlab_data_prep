@@ -6,7 +6,7 @@ from pathlib import Path
 
 from landlab_data_prep.analysis_grid import grid_from_config
 from landlab_data_prep.export_ascii_to_tif import export_ascii_dir_to_tifs
-from landlab_data_prep.config import ConfigError, load_config
+from landlab_data_prep.config import load_config
 from landlab_data_prep.pipeline import run_landlab_pipeline, run_raster_pipeline
 
 
@@ -47,32 +47,34 @@ def _resolve_output_crs(cfg: dict) -> str:
 
 def main() -> None:
     args = _parse_args()
+    debug = args.log_level.upper() == "DEBUG"
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
+    if not debug:
+        logging.getLogger("rasterio").setLevel(logging.WARNING)  # e.g. "boto3 not available": harmless, but alarming
 
     try:
         cfg = load_config(args.config, "pipeline")
-    except (ConfigError, FileNotFoundError) as exc:
-        raise SystemExit(str(exc)) from None
+        _run(cfg, args)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        if debug:
+            raise
+        # Expected problems (a bad path, a missing key, a failed download) read best as one message.
+        raise SystemExit(f"{exc}\n(Rerun with --log-level DEBUG for the full traceback.)") from None
+    print(f"Done. Layers are in {cfg['paths']['output_dir']}")
+
+
+def _run(cfg: dict, args: argparse.Namespace) -> None:
     outputs = run_raster_pipeline(
         cfg,
         cleanup_intermediates=not args.keep_intermediates,
     )
-    if args.raster_only:
-        if args.export_final_tifs:
-            crs = _resolve_output_crs(cfg)
-            export_ascii_dir_to_tifs(
-                Path(cfg["paths"]["output_dir"]),
-                overwrite=True,
-                crs=crs,
-            )
-        return
-    run_landlab_pipeline(cfg, outputs)
+    if not args.raster_only:
+        run_landlab_pipeline(cfg, outputs)
     if args.export_final_tifs:
-        crs = _resolve_output_crs(cfg)
         export_ascii_dir_to_tifs(
             Path(cfg["paths"]["output_dir"]),
             overwrite=True,
-            crs=crs,
+            crs=_resolve_output_crs(cfg),
         )
 
 

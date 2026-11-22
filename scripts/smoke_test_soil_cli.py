@@ -5,7 +5,6 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import importlib.util
 
 import geopandas as gpd
 import numpy as np
@@ -32,12 +31,6 @@ def _write_tif(path: Path, data: np.ndarray, transform, crs: str, nodata: float 
 
 
 def main() -> None:
-    if importlib.util.find_spec("fiona") is None:
-        raise RuntimeError(
-            "Missing dependency 'fiona'. Create env first: "
-            "'conda env create -f environment.yml && conda activate landlab_data_prep'"
-        )
-
     root = Path(__file__).resolve().parents[1]
     cli_path = root / "scripts" / "soil_run.py"
     if not cli_path.exists():

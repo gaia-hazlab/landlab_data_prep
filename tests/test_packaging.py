@@ -20,6 +20,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from landlab_data_prep import __version__
+from landlab_data_prep.analysis_grid import grid_from_config
 from landlab_data_prep.config import validate_config
 from landlab_data_prep.init_config import main, template_text
 
@@ -36,7 +37,8 @@ def _name(requirement: str) -> str:
 
 @needs_toml
 def test_conda_and_pip_declare_the_same_dependencies() -> None:
-    pip = {_name(r) for r in PYPROJECT["project"]["dependencies"]}
+    # A requirement with an environment marker guards one Python version under pip; conda pins its own Python.
+    pip = {_name(r) for r in PYPROJECT["project"]["dependencies"] if ";" not in r}
     dev = {_name(r) for r in PYPROJECT["project"]["optional-dependencies"]["dev"]}
     conda = yaml.safe_load((ROOT / "environment.yml").read_text())["dependencies"]
     conda = {_name(d) for d in conda if isinstance(d, str)} - {"python", "pip"}
@@ -78,3 +80,19 @@ def test_init_config_writes_a_private_file_and_refuses_to_clobber(tmp_path: Path
 
     assert main(["--output", str(out), "--force"]) == 0
     assert out.read_text() == template_text()
+
+
+def test_init_config_example_runs_as_it_is(tmp_path: Path, capsys) -> None:
+    out = tmp_path / "config" / "base.yaml"
+    assert main(["--output", str(out), "--example"]) == 0
+    cfg = yaml.safe_load(out.read_text())
+    validate_config(cfg, "pipeline")
+    aoi = Path(cfg["aoi"]["aoi"])
+    assert aoi.is_file() and aoi.parent == out.parent.resolve()
+    assert Path(cfg["paths"]["output_dir"]) == (tmp_path / "output").resolve()
+    assert Path(cfg["paths"]["cache_dir"]) == (tmp_path / "cache").resolve()
+    assert (cfg["fire"]["name"], cfg["fire"]["id"]) == ("Pioneer", "WA4818312053120240608")
+    grid = grid_from_config(cfg)
+    assert grid.crs == "EPSG:32610" and grid.resolution == 10.0
+    assert 30_000 < grid.width * grid.height < 80_000  # a 3.3 km2 basin at 10 m
+    assert "OPENTOPOGRAPHY_API_KEY" in capsys.readouterr().out

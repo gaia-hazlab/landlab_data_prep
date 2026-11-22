@@ -525,7 +525,6 @@ def test_window_emptied_by_cloud_max_names_the_cause(tmp_path: Path, monkeypatch
 
 def _shared_config(tmp_path: Path, target_res: float) -> tuple[dict, Path]:
     """One config, as a user would write it, read by the pipeline, soil and HLS commands."""
-    pytest.importorskip("fiona")
     pytest.importorskip("landlab")
     data_dir, out_dir = tmp_path / "inputs", tmp_path / "outputs"
     data_dir.mkdir()

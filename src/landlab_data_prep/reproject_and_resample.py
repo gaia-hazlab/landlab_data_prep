@@ -9,39 +9,24 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import fiona
 import numpy as np
 import rasterio
-from rasterio.crs import CRS
 from rasterio.mask import mask
 from rasterio.transform import array_bounds
-from rasterio.warp import transform_geom
+from shapely.geometry import mapping
 
 from landlab_data_prep.analysis_grid import Grid, check_on_grid, read_ascii_header
+from landlab_data_prep.preflight import load_and_validate_aoi
 
 __all__ = ["clip_raster_to_shape", "convert_to_ascii", "read_ascii_header"]
 
 
-def _read_shapes(
-    shapefile_path: str,
-    raster_crs,
-    reproject_shapes: bool = True,
-) -> list[dict]:
-    with fiona.open(shapefile_path, "r") as src:
-        shapes = [feature["geometry"] for feature in src]
-        if not reproject_shapes:
-            return shapes
-
-        src_crs = src.crs_wkt or src.crs
-        if not src_crs or raster_crs is None:
-            return shapes
-
-        src_crs_obj = CRS.from_user_input(src_crs)
-        dst_crs_obj = CRS.from_user_input(raster_crs)
-        if src_crs_obj == dst_crs_obj:
-            return shapes
-
-        return [transform_geom(src_crs_obj, dst_crs_obj, geom) for geom in shapes]
+def _read_shapes(aoi_path: str, raster_crs) -> list[dict]:
+    """The AOI's geometries as GeoJSON-like mappings, in the raster's CRS."""
+    aoi = load_and_validate_aoi(aoi_path)
+    if raster_crs is not None:
+        aoi = aoi.to_crs(raster_crs)
+    return [mapping(geometry) for geometry in aoi.geometry]
 
 
 def clip_raster_to_shape(raster_path: str, shapefile_path: str) -> str:

@@ -19,7 +19,7 @@ from landlab_data_prep.pipeline import (
     run_pipeline,
     run_raster_pipeline,
 )
-from landlab_data_prep.analysis_grid import check_on_grid, grid_from_config
+from landlab_data_prep.analysis_grid import check_on_grid, grid_from_config, snap_grid
 from landlab_data_prep.config import ConfigError
 from landlab_data_prep.export_ascii_to_tif import export_ascii_dir_to_tifs
 from landlab_data_prep.reproject_and_resample import clip_raster_to_shape, convert_to_ascii, read_ascii_header
@@ -51,7 +51,6 @@ def _write_aoi(path: Path, bounds, crs: str) -> None:
 
 
 def test_clip_raster_to_shape_crops_on_the_source_grid(tmp_path: Path) -> None:
-    pytest.importorskip("fiona")
 
     crs = "EPSG:32610"
     transform = from_origin(500000.0, 4100000.0, 30.0, 30.0)
@@ -105,8 +104,32 @@ def test_raster_pipeline_reports_every_failed_source(tmp_path: Path, monkeypatch
     assert "b:" not in message
 
 
+def test_remote_geotiffs_are_read_around_the_grid_and_zips_downloaded_whole(tmp_path: Path, monkeypatch) -> None:
+    from landlab_data_prep import pipeline
+
+    grid = snap_grid((500000.0, 4100000.0, 500300.0, 4100300.0), "EPSG:32610", 30.0)
+    calls = []
+
+    def window(url, cache_dir, g):
+        calls.append(("window", url, g))
+        return tmp_path / "window.tif"
+
+    def whole(url, cache_dir):
+        calls.append(("whole", url))
+        return tmp_path / "fire_sbs.zip"
+
+    monkeypatch.setattr(pipeline, "fetch_raster", window)
+    monkeypatch.setattr(pipeline, "cached_download", whole)
+    monkeypatch.setattr(pipeline, "_tif_from_zip", lambda zip_path, dest, spec: tmp_path / "fire_sbs.tif")
+    soil = pipeline.SourceSpec("claytotal_0_cm", "https://example.org/clay.tif", "bilinear")
+    sbs = pipeline.SourceSpec("burn_severity", ["https://example.org/fire_sbs.zip"], "nearest", unzip=True)
+
+    assert pipeline.resolve_source_to_tif(soil, str(tmp_path), str(tmp_path), grid) == str(tmp_path / "window.tif")
+    assert pipeline.resolve_source_to_tif(sbs, str(tmp_path), str(tmp_path), grid) == str(tmp_path / "fire_sbs.tif")
+    assert calls == [("window", "https://example.org/clay.tif", grid), ("whole", "https://example.org/fire_sbs.zip")]
+
+
 def test_main_pipeline_local_smoke(tmp_path: Path) -> None:
-    pytest.importorskip("fiona")
     pytest.importorskip("geopandas")
     pytest.importorskip("landlab")
 

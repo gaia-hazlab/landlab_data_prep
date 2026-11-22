@@ -14,9 +14,8 @@ venv/
 ENV/
 .env
 
-# Local runtime config
-config/base.yaml
-config/*.local.yaml
+# Local runtime config: every config holds one user's paths, and may hold a key
+config/
 
 # Jupyter / IPython
 .ipynb_checkpoints/
@@ -62,6 +61,8 @@ data/
 # Local cache/output
 notebook/landlab_ascii/
 notebook/cache/
+/output/
+/cache/
 
 # Model artifacts / outputs
 *.ckpt

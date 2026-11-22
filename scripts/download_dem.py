@@ -54,9 +54,10 @@ def read_aoi(path: Path) -> gpd.GeoDataFrame:
         with src:
             if src.crs is None:
                 raise ValueError(f"Raster AOI has no CRS: {path}")
-            corners = [src.transform * p for p in
-                       [(0, 0), (src.width, 0), (src.width, src.height), (0, src.height)]]
-            aoi = gpd.GeoDataFrame(geometry=[Polygon(corners)], crs=src.crs)
+            xs, ys = rasterio.transform.xy(
+                src.transform, [0, 0, src.height, src.height], [0, src.width, src.width, 0], offset="ul"
+            )
+            aoi = gpd.GeoDataFrame(geometry=[Polygon(zip(xs, ys, strict=True))], crs=src.crs)
     if aoi.crs is None or aoi.empty:
         raise ValueError("AOI must contain geometry and a CRS")
     if aoi.geometry.isna().any() or aoi.geometry.is_empty.any() or not aoi.geometry.is_valid.all():
