@@ -6,8 +6,8 @@ type: software
 authors:
   - family-names: Al Mehedi
     given-names: Abdullah
-version: 1.0.0
-date-released: 2026-09-29
+version: 1.1.0
+date-released: 2026-11-22
 license: MIT
 repository-code: https://github.com/gaia-hazlab/landlab_data_prep
 keywords:

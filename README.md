@@ -15,7 +15,8 @@ source .venv/bin/activate                  # Windows: .venv\Scripts\activate
 pip install "landlab_data_prep @ git+https://github.com/gaia-hazlab/landlab_data_prep"
 ```
 
-Every dependency installs from a prebuilt wheel, in about two minutes.
+Every dependency installs from a prebuilt wheel, in about two minutes. To
+install a fixed release, end the URL with its tag, such as `@v1.1.0`.
 
 **With conda** instead, from a clone. Use [Miniforge](https://conda-forge.org/download/);
 with Miniconda or Anaconda, run `conda tos accept` once first.

@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-11-22
+
+Installs and runs on any machine: Python 3.10 to 3.14 with pip or conda, a
+ready example, and a first run that downloads megabytes, not gigabytes. New
+optional sources: Synoptic station rain, NISAR, and SMAP soil moisture.
 
 ### Added
 

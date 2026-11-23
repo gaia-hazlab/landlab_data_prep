@@ -1,3 +1,3 @@
 """AOI-based geospatial data preparation for postfire debris-flow and landslide modeling."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
