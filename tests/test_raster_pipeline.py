@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import sys
 
@@ -129,10 +130,8 @@ def test_remote_geotiffs_are_read_around_the_grid_and_zips_downloaded_whole(tmp_
     assert calls == [("window", "https://example.org/clay.tif", grid), ("whole", "https://example.org/fire_sbs.zip")]
 
 
-def test_main_pipeline_local_smoke(tmp_path: Path) -> None:
-    pytest.importorskip("geopandas")
-    pytest.importorskip("landlab")
-
+def _local_pipeline_config(tmp_path: Path) -> dict:
+    """A pipeline config whose DEM, burn severity, soils, K-factor and land cover are small local rasters."""
     crs = "EPSG:32610"
     transform = from_origin(500000.0, 4100000.0, 30.0, 30.0)
     shape = (6, 6)
@@ -183,7 +182,7 @@ def test_main_pipeline_local_smoke(tmp_path: Path) -> None:
     aoi_path = data_dir / "aoi.shp"
     _write_aoi(aoi_path, (bounds.left, bounds.bottom, bounds.right, bounds.top), crs)
 
-    cfg = {
+    return {
         "aoi": {"aoi": str(aoi_path)},
         "paths": {
             "output_dir": str(out_dir),
@@ -227,6 +226,13 @@ def test_main_pipeline_local_smoke(tmp_path: Path) -> None:
             },
         },
     }
+
+
+def test_main_pipeline_local_smoke(tmp_path: Path) -> None:
+    pytest.importorskip("geopandas")
+    pytest.importorskip("landlab")
+    cfg = _local_pipeline_config(tmp_path)
+    out_dir = Path(cfg["paths"]["output_dir"])
 
     outputs = run_raster_pipeline(cfg, cleanup_intermediates=False)
     grid = grid_from_config(cfg)
@@ -277,6 +283,61 @@ def test_main_pipeline_local_smoke(tmp_path: Path) -> None:
         assert np.isfinite(data).all(), f"non-finite values in {tif.name}"
         if tif.stem in derived:
             assert (data[outside] == -9999.0).all(), f"{tif.name} is not nodata outside the AOI"
+
+
+def test_pipeline_command_skips_a_layer_it_cannot_prepare(tmp_path: Path, monkeypatch) -> None:
+    pytest.importorskip("geopandas")
+    pytest.importorskip("landlab")
+    from landlab_data_prep import pipeline
+    from landlab_data_prep.run_pipeline import _run
+
+    cfg = _local_pipeline_config(tmp_path)
+    out_dir = Path(cfg["paths"]["output_dir"])
+    real_process_source = pipeline.process_source
+
+    def no_burn_map(spec, *args, **kwargs):
+        if spec.key == "burn_severity":  # as for a fire with no BAER map
+            raise RuntimeError("No candidate worked for burn_severity")
+        return real_process_source(spec, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "process_source", no_burn_map)
+    args = argparse.Namespace(keep_intermediates=False, raster_only=False, export_final_tifs=True)
+    skipped = _run(cfg, args)
+
+    assert skipped == {"burn_severity": "RuntimeError: No candidate worked for burn_severity"}
+    names = {p.name for p in out_dir.iterdir()}
+    assert not {"burn__severity.asc", "burn_severity.asc"} & names
+    # Everything else is built under its usual name and exported; no source-named leftovers.
+    for field in (
+        "topographic__elevation", "soil__thickness", "soil__transmissivity", "soil__internal_friction_angle",
+        "landcover", "soil__mode_total_cohesion", "vegetation__plant_functional_type", "kffact",
+    ):
+        assert {f"{field}.asc", f"{field}.tif"} <= names, field
+    assert not {"dem.asc", "cec7_0_cm.asc", "nlcd_local.asc"} & names
+
+
+def test_raster_pipeline_records_failed_sources_when_asked(tmp_path: Path, monkeypatch) -> None:
+    from landlab_data_prep import pipeline
+
+    specs = [pipeline.SourceSpec(key, f"{key}.tif", "bilinear") for key in ("a", "b")]
+
+    def fake_process(spec, *args, **kwargs):
+        if spec.key == "b":
+            return "b.asc"
+        raise OSError(f"cannot read {spec.uri}")
+
+    monkeypatch.setattr(pipeline, "validate_pipeline_inputs", lambda cfg: None)
+    monkeypatch.setattr(pipeline, "grid_from_config", lambda cfg: snap_grid((0, 0, 30, 30), "EPSG:32610", 30.0))
+    monkeypatch.setattr(pipeline, "fetch_dem", lambda *args: "dem.tif")
+    monkeypatch.setattr(pipeline, "process_dem", lambda *args: "dem.asc")
+    monkeypatch.setattr(pipeline, "build_sources_from_config", lambda cfg: specs)
+    monkeypatch.setattr(pipeline, "process_source", fake_process)
+    cfg = {"aoi": {"aoi": "aoi.shp"}, "paths": {"output_dir": str(tmp_path / "out")}, "dem": {}}
+
+    skipped: dict = {}
+    outputs = pipeline.run_raster_pipeline(cfg, skipped=skipped)
+    assert outputs == {"dem": "dem.asc", "b": "b.asc"}
+    assert skipped == {"a": "OSError: cannot read a.tif"}
 
 
 def test_disabled_dnbr_needs_no_source_configuration() -> None:

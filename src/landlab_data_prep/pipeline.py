@@ -324,7 +324,13 @@ def process_source(
     return ascii_path
 
 
-def run_raster_pipeline(cfg: dict, cleanup_intermediates: bool = True) -> dict:
+def run_raster_pipeline(cfg: dict, cleanup_intermediates: bool = True, skipped: dict | None = None) -> dict:
+    """Put the DEM and every configured source on the analysis grid; returns {key: ASCII path}.
+
+    The DEM is always required. Every source is tried, so one run shows every
+    failure. When ``skipped`` is a dict, a source that cannot be prepared is
+    recorded there (key -> reason) and left out; otherwise the run raises.
+    """
     validate_pipeline_inputs(cfg)
     grid = grid_from_config(cfg)
     aoi_path = cfg["aoi"]["aoi"]
@@ -340,19 +346,23 @@ def run_raster_pipeline(cfg: dict, cleanup_intermediates: bool = True) -> dict:
     dem_path = fetch_dem(aoi_path, cfg["dem"], cache_dir)
     outputs = {"dem": process_dem(str(dem_path), aoi_path, grid, output_dir)}
 
-    # Every configured source is required. Collect all failures so one run shows them all.
-    failures: list[str] = []
+    failures: dict[str, str] = {}
     for spec in build_sources_from_config(cfg):
         try:
             outputs[spec.key] = process_source(
                 spec, aoi_path, grid, output_dir, cache_dir=cache_dir, cleanup_intermediates=cleanup_intermediates
             )
         except Exception as exc:
-            failures.append(f"{spec.key}: {type(exc).__name__}: {exc}")
-    if failures:
+            failures[spec.key] = f"{type(exc).__name__}: {exc}"
+    if failures and skipped is None:
         raise RuntimeError(
-            "Could not prepare every configured source:\n" + "\n".join(f"  - {f}" for f in failures)
+            "Could not prepare every configured source:\n"
+            + "\n".join(f"  - {key}: {reason}" for key, reason in failures.items())
         )
+    for key, reason in failures.items():
+        LOG.warning("Skipping %s, which could not be prepared: %s", key, reason)
+    if skipped is not None:
+        skipped.update(failures)
 
     if cleanup_intermediates:
         _cleanup_intermediates(output_dir)
@@ -448,14 +458,45 @@ def run_landlab_pipeline(cfg: dict, outputs: dict, strict: bool = True):
         "dry__bulk_density",
         "sand__total",
     ]
-    for name in required:
-        if name not in grid.at_node:
-            raise ValueError(f"Missing required field: {name}")
+    missing = [name for name in required if name not in grid.at_node]
+    if missing and strict:
+        raise ValueError(f"Missing required field: {missing[0]}")
+    if missing:
+        LOG.warning("Skipping the fields computed from soil properties: %s missing", ", ".join(missing))
+    else:
+        landcover_skipped = bool(landcover_keys) and "landcover" not in grid.at_node
+        _add_soil_fields(grid, analysis_grid, output_dir, required, landcover_skipped)
 
+    if "landcover" in grid.at_node:
+        landcover = grid.at_node["landcover"]
+        landcover_color = rootcohesion(landcover, 0, 1, 2, 3, 4, 5)
+        grid.add_field("landcovercolor", landcover_color, at="node", clobber=True)
+
+        c_min, c_mode, c_max = compute_cohesion(landcover)
+        grid.add_field("soil__minimum_total_cohesion", c_min, at="node", clobber=True)
+        grid.add_field("soil__maximum_total_cohesion", c_max, at="node", clobber=True)
+        grid.add_field("soil__mode_total_cohesion", c_mode, at="node", clobber=True)
+
+        vegetation_type = vegtype(landcover, NODATA, 3, 2, 1, 0)
+        grid.add_field("vegetation__plant_functional_type", vegetation_type, at="node", clobber=True)
+
+        for name in (
+            "soil__minimum_total_cohesion",
+            "soil__maximum_total_cohesion",
+            "soil__mode_total_cohesion",
+            "vegetation__plant_functional_type",
+        ):
+            _write_field(grid, analysis_grid, output_dir, name)
+
+    return grid
+
+
+def _add_soil_fields(grid, analysis_grid: Grid, output_dir: str, inputs: list[str], landcover_skipped: bool) -> None:
+    """Hydraulic and strength fields computed from the soil properties ``inputs``, all on the grid."""
     # A cell missing any soil input is nodata in every soil-derived field. The
     # formulas would otherwise turn -9999 inputs into huge or infinite numbers.
     soil_missing = np.zeros(grid.number_of_nodes, dtype=bool)
-    for name in required:
+    for name in inputs:
         soil_missing |= grid.at_node[name] == NODATA
 
     def add_soil_field(name: str, values) -> None:
@@ -508,7 +549,7 @@ def run_landlab_pipeline(cfg: dict, outputs: dict, strict: bool = True):
         density = compute_soil_density(grid.at_node["dry__bulk_density"], grid.at_node["porosity"])
         add_soil_field("soil__density", np.where(grid.at_node["porosity"] == NODATA, NODATA, density))
 
-    for name in (
+    names = [
         "soil__saturated_hydraulic_conductivity",
         "soil__transmissivity",
         "saturated__water_content",
@@ -518,31 +559,13 @@ def run_landlab_pipeline(cfg: dict, outputs: dict, strict: bool = True):
         "porosity",
         "soil__internal_friction_angle",
         "soil__density",
-    ):
+    ]
+    if landcover_skipped:
+        # Without its land-cover adjustment the friction angle would be a plausible wrong number.
+        names.remove("soil__internal_friction_angle")
+        LOG.warning("Skipping soil__internal_friction_angle: it needs the land cover, which was skipped")
+    for name in names:
         _write_field(grid, analysis_grid, output_dir, name)
-
-    if "landcover" in grid.at_node:
-        landcover = grid.at_node["landcover"]
-        landcover_color = rootcohesion(landcover, 0, 1, 2, 3, 4, 5)
-        grid.add_field("landcovercolor", landcover_color, at="node", clobber=True)
-
-        c_min, c_mode, c_max = compute_cohesion(landcover)
-        grid.add_field("soil__minimum_total_cohesion", c_min, at="node", clobber=True)
-        grid.add_field("soil__maximum_total_cohesion", c_max, at="node", clobber=True)
-        grid.add_field("soil__mode_total_cohesion", c_mode, at="node", clobber=True)
-
-        vegetation_type = vegtype(landcover, NODATA, 3, 2, 1, 0)
-        grid.add_field("vegetation__plant_functional_type", vegetation_type, at="node", clobber=True)
-
-        for name in (
-            "soil__minimum_total_cohesion",
-            "soil__maximum_total_cohesion",
-            "soil__mode_total_cohesion",
-            "vegetation__plant_functional_type",
-        ):
-            _write_field(grid, analysis_grid, output_dir, name)
-
-    return grid
 
 
 def run_pipeline(config_path: str, cleanup_intermediates: bool = True):

@@ -54,28 +54,37 @@ def main() -> None:
 
     try:
         cfg = load_config(args.config, "pipeline")
-        _run(cfg, args)
+        skipped = _run(cfg, args)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         if debug:
             raise
         # Expected problems (a bad path, a missing key, a failed download) read best as one message.
         raise SystemExit(f"{exc}\n(Rerun with --log-level DEBUG for the full traceback.)") from None
     print(f"Done. Layers are in {cfg['paths']['output_dir']}")
+    if skipped:
+        print(f"Skipped {len(skipped)} layer(s) that could not be prepared, and the fields computed from them:")
+        for key, reason in skipped.items():
+            print(f"  - {key}: {reason}")
 
 
-def _run(cfg: dict, args: argparse.Namespace) -> None:
+def _run(cfg: dict, args: argparse.Namespace) -> dict[str, str]:
+    """Build the layers; returns the sources that could not be prepared (key -> reason)."""
+    skipped: dict[str, str] = {}
+    # A layer that cannot be prepared (e.g. a fire with no BAER map) is left out; the rest is built.
     outputs = run_raster_pipeline(
         cfg,
         cleanup_intermediates=not args.keep_intermediates,
+        skipped=skipped,
     )
     if not args.raster_only:
-        run_landlab_pipeline(cfg, outputs)
+        run_landlab_pipeline(cfg, outputs, strict=not skipped)
     if args.export_final_tifs:
         export_ascii_dir_to_tifs(
             Path(cfg["paths"]["output_dir"]),
             overwrite=True,
             crs=_resolve_output_crs(cfg),
         )
+    return skipped
 
 
 if __name__ == "__main__":

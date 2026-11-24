@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `landlab-prep-pipeline` no longer stops when one layer cannot be prepared,
+  for example a fire with no BAER burn severity map. It leaves that layer and
+  the fields computed from it out, builds the rest under the usual names, and
+  lists what it skipped at the end. The DEM is still required. From Python,
+  `run_raster_pipeline` still raises unless it is given a `skipped` dict.
+
 ## 1.1.0 - 2026-11-22
 
 Installs and runs on any machine: Python 3.10 to 3.14 with pip or conda, a
